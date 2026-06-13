@@ -22,12 +22,14 @@ import {
   LogIn,
   Menu,
   MessageCircle,
+  Pencil,
   Plus,
   Printer,
   Receipt,
   ShieldCheck,
   Sparkles,
   Table2,
+  Trash2,
   TrendingDown,
   TrendingUp,
   Upload,
@@ -297,13 +299,16 @@ export default function FinanceExperience() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scope, setScope] = useState<"month" | "year">("month");
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const [reportPickerOpen, setReportPickerOpen] = useState(false);
   const [transactions, setTransactions] = useState<FinanceTransaction[]>([]);
   const [draft, setDraft] = useState<DraftTransaction>(initialDraft);
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [draftFeedback, setDraftFeedback] = useState("");
   const [quickEntry, setQuickEntry] = useState("");
   const [quickFeedback, setQuickFeedback] = useState("");
   const [importFeedback, setImportFeedback] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const transactionFormRef = useRef<HTMLDivElement>(null);
   const isAuthed = status === "authenticated";
   const userStorageKey = session?.user?.id
     ? `verdeflux-transactions-${session.user.id}`
@@ -417,7 +422,8 @@ export default function FinanceExperience() {
     draft.recurrenceMode === "installments" && draftOccurrenceCount > 1
       ? draftAmount / draftOccurrenceCount
       : draftAmount;
-  const selectedReportDate = `${selectedMonth}-01`;
+  const selectedReportYear = Number(selectedMonth.slice(0, 4));
+  const selectedReportMonthIndex = Number(selectedMonth.slice(5, 7)) - 1;
 
   function openAuth(mode: "login" | "signup") {
     setAuthMode(mode);
@@ -427,7 +433,60 @@ export default function FinanceExperience() {
 
   function finishAuth() {
     setAuthOpen(false);
+    transactionFormRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  function cancelEdit() {
+    setEditingTransactionId(null);
+    setDraft(initialDraft);
+    setDraftFeedback("");
+  }
+
+  function editTransaction(transaction: FinanceTransaction) {
+    setEditingTransactionId(transaction.id);
+    setDraft({
+      description: transaction.description.replace(/\s\(\d+\/\d+\)$/, ""),
+      category: transaction.category,
+      account: transaction.account,
+      type: transaction.type,
+      amount: transaction.amount.toFixed(2).replace(".", ","),
+      date: transaction.date,
+      recurrenceMode: "single",
+      installmentCount: transaction.installmentTotal ?? 3,
+    });
+    setDraftFeedback(
+      transaction.recurrenceId
+        ? "Editando apenas este lancamento da recorrencia."
+        : "Editando lancamento.",
+    );
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function deleteTransaction(transactionId: string) {
+    setTransactions((current) =>
+      current.filter((transaction) => transaction.id !== transactionId),
+    );
+
+    if (editingTransactionId === transactionId) {
+      cancelEdit();
+    }
+  }
+
+  function deleteRecurrence(recurrenceId: string) {
+    setTransactions((current) =>
+      current.filter((transaction) => transaction.recurrenceId !== recurrenceId),
+    );
+
+    const editingTransaction = transactions.find(
+      (transaction) => transaction.id === editingTransactionId,
+    );
+
+    if (editingTransaction?.recurrenceId === recurrenceId) {
+      cancelEdit();
+    }
   }
 
   function addTransaction() {
@@ -435,6 +494,28 @@ export default function FinanceExperience() {
 
     if (!draft.description.trim() || amount <= 0) {
       setDraftFeedback("Preencha descricao e valor.");
+      return;
+    }
+
+    if (editingTransactionId) {
+      setTransactions((current) =>
+        current.map((transaction) =>
+          transaction.id === editingTransactionId
+            ? {
+                ...transaction,
+                description: draft.description.trim(),
+                category: draft.category,
+                account: draft.account,
+                type: draft.type,
+                amount,
+                date: draft.date,
+              }
+            : transaction,
+        ),
+      );
+      setEditingTransactionId(null);
+      setDraft(initialDraft);
+      setDraftFeedback("Lancamento atualizado.");
       return;
     }
 
@@ -633,21 +714,81 @@ export default function FinanceExperience() {
               >
                 Anual
               </button>
-              <label className="relative flex cursor-pointer items-center gap-2 overflow-hidden rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:ring-2 hover:ring-emerald-100">
-                <Calendar className="h-4 w-4 text-emerald-700" />
-                <span>{selectedMonth}</span>
-                <input
-                  aria-label="Mes do relatorio"
-                  type="date"
-                  value={selectedReportDate}
-                  onChange={(event) => {
-                    if (event.target.value) {
-                      setSelectedMonth(event.target.value.slice(0, 7));
-                    }
-                  }}
-                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                />
-              </label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setReportPickerOpen((open) => !open)}
+                  className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:ring-2 hover:ring-emerald-100"
+                  aria-expanded={reportPickerOpen}
+                  aria-haspopup="dialog"
+                >
+                  <Calendar className="h-4 w-4 text-emerald-700" />
+                  {selectedMonth}
+                </button>
+                <AnimatePresence>
+                  {reportPickerOpen ? (
+                    <motion.div
+                      className="absolute right-0 top-12 z-30 w-72 rounded-2xl border border-emerald-100 bg-white p-3 shadow-2xl shadow-emerald-950/10"
+                      initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                      role="dialog"
+                      aria-label="Selecionar mes do relatorio"
+                    >
+                      <div className="mb-3 flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedMonth(`${selectedReportYear - 1}-${String(selectedReportMonthIndex + 1).padStart(2, "0")}`)
+                          }
+                          className="grid h-9 w-9 place-items-center rounded-full bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100"
+                          aria-label="Ano anterior"
+                        >
+                          <ChevronRight className="h-4 w-4 rotate-180" />
+                        </button>
+                        <strong className="text-sm font-bold text-slate-900">
+                          {selectedReportYear}
+                        </strong>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedMonth(`${selectedReportYear + 1}-${String(selectedReportMonthIndex + 1).padStart(2, "0")}`)
+                          }
+                          className="grid h-9 w-9 place-items-center rounded-full bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100"
+                          aria-label="Proximo ano"
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {monthLabels.map((label, index) => {
+                          const monthValue = `${selectedReportYear}-${String(index + 1).padStart(2, "0")}`;
+                          const active = selectedMonth === monthValue;
+
+                          return (
+                            <button
+                              key={label}
+                              type="button"
+                              onClick={() => {
+                                setSelectedMonth(monthValue);
+                                setScope("month");
+                                setReportPickerOpen(false);
+                              }}
+                              className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+                                active
+                                  ? "bg-emerald-700 text-white"
+                                  : "bg-emerald-50 text-slate-700 hover:bg-emerald-100"
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
+              </div>
             </div>
           </div>
 
@@ -714,37 +855,57 @@ export default function FinanceExperience() {
             </Panel>
 
             <Panel title="Categorias" icon={CircleDollarSign}>
-              <div className="grid gap-4 sm:grid-cols-[0.9fr_1fr] xl:grid-cols-1">
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={categorySeries} dataKey="value" innerRadius={62} outerRadius={94} paddingAngle={4}>
-                        {categorySeries.map((entry) => (
-                          <Cell key={entry.name} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-                    </PieChart>
-                  </ResponsiveContainer>
+              {categorySeries.length ? (
+                <div className="grid gap-4 sm:grid-cols-[0.9fr_1fr] xl:grid-cols-1">
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={categorySeries} dataKey="value" innerRadius={62} outerRadius={94} paddingAngle={4}>
+                          {categorySeries.map((entry) => (
+                            <Cell key={entry.name} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="space-y-3">
+                    {categorySeries.slice(0, 5).map((entry) => (
+                      <div key={entry.name} className="flex items-center justify-between gap-3">
+                        <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-700">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry.color }} />
+                          <span className="truncate">{entry.name}</span>
+                        </span>
+                        <span className="text-sm font-semibold text-slate-950">{formatCurrency(entry.value)}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-3">
-                  {categorySeries.slice(0, 5).map((entry) => (
-                    <div key={entry.name} className="flex items-center justify-between gap-3">
-                      <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-700">
-                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry.color }} />
-                        <span className="truncate">{entry.name}</span>
-                      </span>
-                      <span className="text-sm font-semibold text-slate-950">{formatCurrency(entry.value)}</span>
-                    </div>
-                  ))}
+              ) : (
+                <div className="flex min-h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 p-6 text-center">
+                  <div className="grid h-12 w-12 place-items-center rounded-2xl bg-white text-emerald-700 shadow-sm">
+                    <CircleDollarSign className="h-6 w-6" />
+                  </div>
+                  <p className="mt-4 font-bold text-slate-950">
+                    Nenhuma despesa neste periodo
+                  </p>
+                  <p className="mt-2 max-w-xs text-sm leading-6 text-slate-600">
+                    Adicione uma despesa ou escolha outro mes para ver a distribuicao por categoria.
+                  </p>
                 </div>
-              </div>
+              )}
             </Panel>
           </div>
 
           <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
-            <Panel title="Novo lancamento" icon={Plus}>
-              <div className="grid gap-3 sm:grid-cols-2">
+            <div ref={transactionFormRef} className="scroll-mt-24">
+              <Panel title={editingTransactionId ? "Editar lancamento" : "Novo lancamento"} icon={Plus}>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {editingTransactionId ? (
+                    <div className="sm:col-span-2 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                      Voce esta alterando um lancamento existente. Para recorrencias, a alteracao vale apenas para o item selecionado.
+                    </div>
+                  ) : null}
                 <label className="flex flex-col gap-1 text-sm font-medium text-slate-700 sm:col-span-2">
                   Descricao
                   <input
@@ -755,7 +916,7 @@ export default function FinanceExperience() {
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-                  {draft.recurrenceMode === "installments" ? "Valor total" : "Valor"}
+                  {!editingTransactionId && draft.recurrenceMode === "installments" ? "Valor total" : "Valor"}
                   <input
                     value={draft.amount}
                     inputMode="decimal"
@@ -763,7 +924,7 @@ export default function FinanceExperience() {
                     className="h-11 rounded-xl border border-emerald-100 bg-white px-3 text-slate-950 outline-none transition focus:border-emerald-500"
                     placeholder="0,00"
                   />
-                  {draft.recurrenceMode === "installments" ? (
+                  {!editingTransactionId && draft.recurrenceMode === "installments" ? (
                     <span className="text-xs font-semibold text-emerald-700">
                       Informe o total da compra; ele sera dividido pelas parcelas.
                     </span>
@@ -820,6 +981,7 @@ export default function FinanceExperience() {
                     Receita
                   </button>
                 </div>
+                {!editingTransactionId ? (
                 <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3 sm:col-span-2">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <span className="text-sm font-bold text-slate-800">
@@ -885,22 +1047,34 @@ export default function FinanceExperience() {
                     </p>
                   ) : null}
                 </div>
+                ) : null}
                 <button
                   onClick={addTransaction}
                   className="sm:col-span-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-bold text-white shadow-lg shadow-emerald-900/10 transition hover:bg-emerald-800"
                 >
                   <Plus className="h-4 w-4" />
-                  {draft.recurrenceMode === "installments"
+                  {editingTransactionId
+                    ? "Salvar alteracoes"
+                    : draft.recurrenceMode === "installments"
                     ? `Adicionar ${draftOccurrenceCount} parcelas`
                     : `Adicionar ${draftOccurrenceCount > 1 ? `${draftOccurrenceCount}x` : ""}`}
                 </button>
+                {editingTransactionId ? (
+                  <button
+                    onClick={cancelEdit}
+                    className="sm:col-span-2 inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 transition hover:border-emerald-300"
+                  >
+                    Cancelar edicao
+                  </button>
+                ) : null}
                 {draftFeedback ? (
                   <p className="sm:col-span-2 text-sm font-medium text-emerald-700">
                     {draftFeedback}
                   </p>
                 ) : null}
               </div>
-            </Panel>
+              </Panel>
+            </div>
 
             <Panel title="Entrada rapida" icon={MessageCircle}>
               <div className="flex flex-col gap-4">
@@ -1006,7 +1180,7 @@ export default function FinanceExperience() {
 
           <Panel title="Ultimos lancamentos" icon={Receipt}>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] border-separate border-spacing-y-2 text-left">
+              <table className="w-full min-w-[860px] border-separate border-spacing-y-2 text-left">
                 <thead>
                   <tr className="text-xs uppercase tracking-[0.12em] text-slate-500">
                     <th className="px-3 py-2">Descricao</th>
@@ -1014,10 +1188,11 @@ export default function FinanceExperience() {
                     <th className="px-3 py-2">Conta</th>
                     <th className="px-3 py-2">Data</th>
                     <th className="px-3 py-2 text-right">Valor</th>
+                    <th className="px-3 py-2 text-right">Acoes</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {latestTransactions.map((transaction) => (
+                  {latestTransactions.length ? latestTransactions.map((transaction) => (
                     <tr key={transaction.id} className="rounded-xl bg-white shadow-sm">
                       <td className="rounded-l-xl px-3 py-3">
                         <div className="font-semibold text-slate-950">{transaction.description}</div>
@@ -1034,15 +1209,53 @@ export default function FinanceExperience() {
                         {new Date(`${transaction.date}T12:00:00`).toLocaleDateString("pt-BR")}
                       </td>
                       <td
-                        className={`rounded-r-xl px-3 py-3 text-right font-bold ${
+                        className={`px-3 py-3 text-right font-bold ${
                           transaction.type === "income" ? "text-emerald-700" : "text-slate-950"
                         }`}
                       >
                         {transaction.type === "income" ? "+" : "-"}
                         {formatCurrency(transaction.amount)}
                       </td>
+                      <td className="rounded-r-xl px-3 py-3">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => editTransaction(transaction)}
+                            className="grid h-9 w-9 place-items-center rounded-full bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100"
+                            aria-label="Editar lancamento"
+                            title="Editar lancamento"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteTransaction(transaction.id)}
+                            className="grid h-9 w-9 place-items-center rounded-full bg-rose-50 text-rose-700 transition hover:bg-rose-100"
+                            aria-label="Excluir lancamento"
+                            title="Excluir lancamento"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                          {transaction.recurrenceId ? (
+                            <button
+                              type="button"
+                              onClick={() => deleteRecurrence(transaction.recurrenceId!)}
+                              className="rounded-full border border-rose-100 bg-white px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-50"
+                              title="Excluir toda a recorrencia"
+                            >
+                              serie
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
                     </tr>
-                  ))}
+                  )) : (
+                    <tr>
+                      <td colSpan={6} className="rounded-xl bg-white px-4 py-8 text-center text-sm font-semibold text-slate-500">
+                        Nenhum lancamento cadastrado ainda.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
