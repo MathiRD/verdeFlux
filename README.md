@@ -2,7 +2,7 @@
 
 VerdeFlux is a modern personal finance dashboard built with Next.js. It provides a responsive landing page, financial metrics, income and expense tracking, recurring transactions, budget views, import/export tools, and report-ready data flows.
 
-The current UI includes a polished local demo experience. The backend foundation is already in place with Prisma, PostgreSQL, NextAuth, and API routes, so the next production step is wiring all dashboard actions to persisted user data.
+The app includes real authentication with NextAuth, Google OAuth, and email/password accounts backed by PostgreSQL. The finance dashboard is ready for use in the browser and stores entries per authenticated user while the remaining production step is moving every dashboard action from browser storage to persisted Prisma records.
 
 ## Tech Stack
 
@@ -122,7 +122,10 @@ npm run db:push
 npm run db:migrate
 npm run db:deploy
 npm run db:studio
+npm run db:clean
 ```
+
+`npm run db:clean` truncates the application tables in the configured PostgreSQL database. Use it only when you intentionally want to wipe the current data.
 
 ## Deploying to Vercel
 
@@ -152,7 +155,8 @@ If you add a custom domain later, update both `NEXTAUTH_URL` and the Google OAut
 
 ## Current Production Notes
 
-- The visual finance dashboard is functional as a local demo experience.
+- Email/password registration and login are backed by PostgreSQL.
+- Google OAuth is available when the Google credentials are configured.
 - Prisma, PostgreSQL models, NextAuth, and initial API routes are available.
-- Full multi-user persistence still needs the dashboard actions connected to the database API.
+- Full server-side persistence for every finance dashboard action still needs the UI connected to the database API.
 - Import/export and PDF-style printing are available from the UI flow.

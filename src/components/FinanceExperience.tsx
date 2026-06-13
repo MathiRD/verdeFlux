@@ -7,6 +7,7 @@ import {
   useSpring,
   useTransform,
 } from "framer-motion";
+import { signIn, signOut, useSession } from "next-auth/react";
 import {
   ArrowDownToLine,
   BarChart3,
@@ -54,7 +55,6 @@ import {
   categories,
   categoryColors,
   demoBudgets,
-  demoTransactions,
   FinanceTransaction,
   formatCurrency,
   formatPercent,
@@ -63,7 +63,7 @@ import {
   RecurrenceMode,
   TransactionKind,
 } from "@/lib/finance-demo";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const today = new Date().toISOString().slice(0, 10);
 const currentMonth = today.slice(0, 7);
@@ -281,59 +281,65 @@ function ScrollPath() {
 }
 
 export default function FinanceExperience() {
+  const { data: session, status } = useSession();
   const [booting, setBooting] = useState(true);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "signup">("signup");
-  const [isAuthed, setIsAuthed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scope, setScope] = useState<"month" | "year">("month");
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
-  const [transactions, setTransactions] = useState<FinanceTransaction[]>(demoTransactions);
+  const [transactions, setTransactions] = useState<FinanceTransaction[]>([]);
   const [draft, setDraft] = useState<DraftTransaction>(initialDraft);
   const [draftFeedback, setDraftFeedback] = useState("");
   const [quickEntry, setQuickEntry] = useState("");
   const [quickFeedback, setQuickFeedback] = useState("");
   const [importFeedback, setImportFeedback] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isAuthed = status === "authenticated";
+  const userStorageKey = session?.user?.id
+    ? `verdeflux-transactions-${session.user.id}`
+    : null;
 
   useEffect(() => {
-    const hydrationTimer = window.setTimeout(() => {
-      const savedTransactions = window.localStorage.getItem("verdeflux-transactions");
-      const savedSession = window.localStorage.getItem("verdeflux-demo-session");
-
-      if (savedTransactions) {
-        try {
-          setTransactions(JSON.parse(savedTransactions) as FinanceTransaction[]);
-        } catch {
-          setTransactions(demoTransactions);
-        }
-      }
-
-      setIsAuthed(savedSession === "active");
-    }, 0);
-
     const timer = window.setTimeout(() => setBooting(false), 950);
     return () => {
-      window.clearTimeout(hydrationTimer);
       window.clearTimeout(timer);
     };
   }, []);
 
   useEffect(() => {
-    if (!booting) {
-      window.localStorage.setItem("verdeflux-transactions", JSON.stringify(transactions));
+    if (status === "loading") {
+      return;
     }
-  }, [booting, transactions]);
+
+    const hydrationTimer = window.setTimeout(() => {
+      if (!userStorageKey) {
+        setTransactions([]);
+        return;
+      }
+
+      const savedTransactions = window.localStorage.getItem(userStorageKey);
+
+      if (!savedTransactions) {
+        setTransactions([]);
+        return;
+      }
+
+      try {
+        setTransactions(JSON.parse(savedTransactions) as FinanceTransaction[]);
+      } catch {
+        setTransactions([]);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(hydrationTimer);
+  }, [status, userStorageKey]);
 
   useEffect(() => {
-    if (!booting) {
-      if (isAuthed) {
-        window.localStorage.setItem("verdeflux-demo-session", "active");
-      } else {
-        window.localStorage.removeItem("verdeflux-demo-session");
-      }
+    if (!booting && userStorageKey) {
+      window.localStorage.setItem(userStorageKey, JSON.stringify(transactions));
     }
-  }, [booting, isAuthed]);
+  }, [booting, transactions, userStorageKey]);
 
   const filteredTransactions = useMemo(() => {
     if (scope === "year") {
@@ -405,7 +411,6 @@ export default function FinanceExperience() {
   }
 
   function finishAuth() {
-    setIsAuthed(true);
     setAuthOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -496,7 +501,7 @@ export default function FinanceExperience() {
       ...current,
     ]);
     setQuickEntry("");
-    setQuickFeedback("Lancamento salvo no modo demo.");
+    setQuickFeedback("Lancamento salvo no painel.");
   }
 
   function exportJson() {
@@ -577,7 +582,12 @@ export default function FinanceExperience() {
     return (
       <main className="min-h-screen bg-[#f5faf6] text-slate-950">
         <Preloader visible={booting} />
-        <DashboardHeader onLogout={() => setIsAuthed(false)} />
+        <DashboardHeader
+          onLogout={() => {
+            setTransactions([]);
+            void signOut({ redirect: false });
+          }}
+        />
         <section id="report-surface" className="print-surface mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 pb-14 pt-24 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
@@ -1000,7 +1010,7 @@ export default function FinanceExperience() {
 
   return (
     <main className="min-h-screen bg-white text-slate-950">
-      <Preloader visible={booting} />
+      <Preloader visible={booting || status === "loading"} />
       <LandingHeader
         mobileOpen={mobileOpen}
         onMobile={() => setMobileOpen((open) => !open)}
@@ -1465,6 +1475,88 @@ function AuthDialog({
   onMode: (mode: "login" | "signup") => void;
   onFinish: () => void;
 }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    const resetTimer = window.setTimeout(() => {
+      if (!open) {
+        return;
+      }
+
+      setFeedback("");
+      setPassword("");
+    }, 0);
+
+    return () => window.clearTimeout(resetTimer);
+  }, [mode, open]);
+
+  async function handleCredentialsSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFeedback("");
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedEmail || !password || (mode === "signup" && !name.trim())) {
+      setFeedback("Preencha todos os campos.");
+      return;
+    }
+
+    if (password.length < 8) {
+      setFeedback("Use uma senha com pelo menos 8 caracteres.");
+      return;
+    }
+
+    setPending(true);
+
+    try {
+      if (mode === "signup") {
+        const response = await fetch("/api/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            email: normalizedEmail,
+            password,
+          }),
+        });
+
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as {
+            error?: string;
+          } | null;
+          throw new Error(payload?.error ?? "Nao foi possivel criar a conta.");
+        }
+      }
+
+      const result = await signIn("credentials", {
+        email: normalizedEmail,
+        password,
+        redirect: false,
+      });
+
+      if (result?.error) {
+        throw new Error("Email ou senha invalidos.");
+      }
+
+      onFinish();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Nao foi possivel autenticar.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    setFeedback("");
+    setPending(true);
+    await signIn("google", { callbackUrl: "/" });
+    setPending(false);
+  }
+
   return (
     <AnimatePresence>
       {open ? (
@@ -1495,35 +1587,54 @@ function AuthDialog({
             </div>
             <form
               className="mt-6 space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                onFinish();
-              }}
+              onSubmit={handleCredentialsSubmit}
             >
               {mode === "signup" ? (
                 <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
                   className="h-12 w-full rounded-xl border border-slate-200 px-4 outline-none transition focus:border-emerald-500"
                   placeholder="Nome"
+                  autoComplete="name"
                 />
               ) : null}
               <input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
                 type="email"
                 className="h-12 w-full rounded-xl border border-slate-200 px-4 outline-none transition focus:border-emerald-500"
                 placeholder="Email"
+                autoComplete="email"
               />
               <input
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
                 type="password"
                 className="h-12 w-full rounded-xl border border-slate-200 px-4 outline-none transition focus:border-emerald-500"
                 placeholder="Senha"
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
               />
-              <button className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-bold text-white transition hover:bg-emerald-800">
+              {feedback ? (
+                <p className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+                  {feedback}
+                </p>
+              ) : null}
+              <button
+                disabled={pending}
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
+              >
                 <LogIn className="h-4 w-4" />
-                {mode === "signup" ? "Criar conta demo" : "Entrar no demo"}
+                {pending
+                  ? "Processando..."
+                  : mode === "signup"
+                    ? "Criar conta"
+                    : "Entrar"}
               </button>
             </form>
             <button
-              onClick={onFinish}
-              className="mt-3 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-800 transition hover:border-emerald-300"
+              onClick={() => void handleGoogleSignIn()}
+              disabled={pending}
+              className="mt-3 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-800 transition hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-70"
             >
               <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
