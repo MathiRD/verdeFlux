@@ -66,7 +66,7 @@ import {
   RecurrenceMode,
   TransactionKind,
 } from "@/lib/finance-demo";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const today = new Date().toISOString().slice(0, 10);
 const currentMonth = today.slice(0, 7);
@@ -308,12 +308,59 @@ export default function FinanceExperience() {
   const [quickEntry, setQuickEntry] = useState("");
   const [quickFeedback, setQuickFeedback] = useState("");
   const [importFeedback, setImportFeedback] = useState("");
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const transactionFormRef = useRef<HTMLDivElement>(null);
   const isAuthed = status === "authenticated";
-  const userStorageKey = session?.user?.id
-    ? `verdeflux-transactions-${session.user.id}`
-    : null;
+  const userId = session?.user?.id;
+
+  const createServerTransactions = useCallback(async (items: FinanceTransaction[]) => {
+    const response = await fetch("/api/transactions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transactions: items }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Nao foi possivel salvar no banco.");
+    }
+
+    return (await response.json()) as { transactions: FinanceTransaction[] };
+  }, []);
+
+  const updateServerTransaction = useCallback(async (item: FinanceTransaction) => {
+    const response = await fetch("/api/transactions", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transaction: item }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Nao foi possivel atualizar no banco.");
+    }
+
+    return (await response.json()) as { transaction: FinanceTransaction };
+  }, []);
+
+  const deleteServerTransaction = useCallback(async (transactionId: string) => {
+    const response = await fetch(`/api/transactions?id=${encodeURIComponent(transactionId)}`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      throw new Error("Nao foi possivel excluir no banco.");
+    }
+  }, []);
+
+  const deleteServerRecurrence = useCallback(async (recurrenceId: string) => {
+    const response = await fetch(`/api/transactions?recurrenceId=${encodeURIComponent(recurrenceId)}`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      throw new Error("Nao foi possivel excluir a serie no banco.");
+    }
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setBooting(false), 950);
@@ -328,33 +375,69 @@ export default function FinanceExperience() {
     }
 
     const hydrationTimer = window.setTimeout(() => {
-      if (!userStorageKey) {
+      if (status !== "authenticated") {
         setTransactions([]);
         return;
       }
 
-      const savedTransactions = window.localStorage.getItem(userStorageKey);
+      async function loadTransactions() {
+        setTransactionsLoading(true);
 
-      if (!savedTransactions) {
-        setTransactions([]);
-        return;
+        try {
+          const response = await fetch("/api/transactions");
+
+          if (!response.ok) {
+            throw new Error("Nao foi possivel carregar os lancamentos.");
+          }
+
+          const payload = (await response.json()) as {
+            transactions?: FinanceTransaction[];
+          };
+          const serverTransactions = payload.transactions ?? [];
+
+          if (serverTransactions.length || !userId) {
+            setTransactions(serverTransactions);
+            return;
+          }
+
+          const legacyKeys = [
+            `verdeflux-transactions-${userId}`,
+            "verdeflux-transactions",
+          ];
+          const legacyTransactions = legacyKeys
+            .map((key) => window.localStorage.getItem(key))
+            .filter(Boolean)
+            .map((value) => {
+              try {
+                return JSON.parse(value!) as FinanceTransaction[];
+              } catch {
+                return [];
+              }
+            })
+            .find((items) => items.length);
+
+          if (legacyTransactions?.length) {
+            const migrated = await createServerTransactions(legacyTransactions);
+            setTransactions(migrated.transactions);
+            legacyKeys.forEach((key) => window.localStorage.removeItem(key));
+            setImportFeedback("Dados locais migrados para o banco.");
+            return;
+          }
+
+          setTransactions([]);
+        } catch {
+          setImportFeedback("Nao consegui carregar os lancamentos do banco.");
+          setTransactions([]);
+        } finally {
+          setTransactionsLoading(false);
+        }
       }
 
-      try {
-        setTransactions(JSON.parse(savedTransactions) as FinanceTransaction[]);
-      } catch {
-        setTransactions([]);
-      }
+      void loadTransactions();
     }, 0);
 
     return () => window.clearTimeout(hydrationTimer);
-  }, [status, userStorageKey]);
-
-  useEffect(() => {
-    if (!booting && userStorageKey) {
-      window.localStorage.setItem(userStorageKey, JSON.stringify(transactions));
-    }
-  }, [booting, transactions, userStorageKey]);
+  }, [status, userId, createServerTransactions]);
 
   const filteredTransactions = useMemo(() => {
     if (scope === "year") {
@@ -484,9 +567,15 @@ export default function FinanceExperience() {
       return;
     }
 
-    setTransactions((current) =>
-      current.filter((transaction) => transaction.id !== transactionId),
-    );
+    try {
+      await deleteServerTransaction(transactionId);
+      setTransactions((current) =>
+        current.filter((transaction) => transaction.id !== transactionId),
+      );
+    } catch (error) {
+      setDraftFeedback(error instanceof Error ? error.message : "Nao foi possivel excluir.");
+      return;
+    }
 
     if (editingTransactionId === transactionId) {
       cancelEdit();
@@ -511,9 +600,15 @@ export default function FinanceExperience() {
       return;
     }
 
-    setTransactions((current) =>
-      current.filter((transaction) => transaction.recurrenceId !== recurrenceId),
-    );
+    try {
+      await deleteServerRecurrence(recurrenceId);
+      setTransactions((current) =>
+        current.filter((transaction) => transaction.recurrenceId !== recurrenceId),
+      );
+    } catch (error) {
+      setDraftFeedback(error instanceof Error ? error.message : "Nao foi possivel excluir a serie.");
+      return;
+    }
 
     const editingTransaction = transactions.find(
       (transaction) => transaction.id === editingTransactionId,
@@ -524,7 +619,7 @@ export default function FinanceExperience() {
     }
   }
 
-  function addTransaction() {
+  async function addTransaction() {
     const amount = parseAmount(draft.amount);
 
     if (!draft.description.trim() || amount <= 0) {
@@ -533,21 +628,39 @@ export default function FinanceExperience() {
     }
 
     if (editingTransactionId) {
-      setTransactions((current) =>
-        current.map((transaction) =>
-          transaction.id === editingTransactionId
-            ? {
-                ...transaction,
-                description: draft.description.trim(),
-                category: draft.category,
-                account: draft.account,
-                type: draft.type,
-                amount,
-                date: draft.date,
-              }
-            : transaction,
-        ),
+      const currentTransaction = transactions.find(
+        (transaction) => transaction.id === editingTransactionId,
       );
+
+      if (!currentTransaction) {
+        setDraftFeedback("Lancamento nao encontrado.");
+        return;
+      }
+
+      const updatedTransaction: FinanceTransaction = {
+        ...currentTransaction,
+        description: draft.description.trim(),
+        category: draft.category,
+        account: draft.account,
+        type: draft.type,
+        amount,
+        date: draft.date,
+      };
+
+      try {
+        const saved = await updateServerTransaction(updatedTransaction);
+        setTransactions((current) =>
+          current.map((transaction) =>
+            transaction.id === editingTransactionId
+              ? saved.transaction
+              : transaction,
+          ),
+        );
+      } catch (error) {
+        setDraftFeedback(error instanceof Error ? error.message : "Nao foi possivel atualizar.");
+        return;
+      }
+
       setEditingTransactionId(null);
       setDraft(initialDraft);
       setDraftFeedback("Lancamento atualizado.");
@@ -594,7 +707,14 @@ export default function FinanceExperience() {
       },
     );
 
-    setTransactions((current) => [...createdTransactions, ...current]);
+    try {
+      const saved = await createServerTransactions(createdTransactions);
+      setTransactions((current) => [...saved.transactions, ...current]);
+    } catch (error) {
+      setDraftFeedback(error instanceof Error ? error.message : "Nao foi possivel salvar.");
+      return;
+    }
+
     setDraftFeedback(
       draft.recurrenceMode === "installments"
         ? `${formatCurrency(amount)} dividido em ${occurrenceCount} parcelas.`
@@ -605,7 +725,7 @@ export default function FinanceExperience() {
     setDraft(initialDraft);
   }
 
-  function addQuickEntry() {
+  async function addQuickEntry() {
     const normalized = normalizeText(quickEntry);
     const amountMatch = quickEntry.match(/(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)/i);
     const amount = amountMatch ? parseAmount(amountMatch[1]) : 0;
@@ -623,19 +743,25 @@ export default function FinanceExperience() {
       quickEntry.replace(amountMatch?.[0] ?? "", "").replace(/\s+/g, " ").trim() ||
       "Lancamento rapido";
 
-    setTransactions((current) => [
-      {
-        id: crypto.randomUUID(),
-        description,
-        category: isIncome ? "Receita fixa" : matchedRule?.category ?? "Alimentacao",
-        account: "Carteira digital",
-        type: isIncome ? "income" : "expense",
-        amount,
-        date: today,
-        source: "Entrada rapida",
-      },
-      ...current,
-    ]);
+    const transaction: FinanceTransaction = {
+      id: crypto.randomUUID(),
+      description,
+      category: isIncome ? "Receita fixa" : matchedRule?.category ?? "Alimentacao",
+      account: "Carteira digital",
+      type: isIncome ? "income" : "expense",
+      amount,
+      date: today,
+      source: "Entrada rapida",
+    };
+
+    try {
+      const saved = await createServerTransactions([transaction]);
+      setTransactions((current) => [...saved.transactions, ...current]);
+    } catch (error) {
+      setQuickFeedback(error instanceof Error ? error.message : "Nao foi possivel salvar.");
+      return;
+    }
+
     setQuickEntry("");
     setQuickFeedback("Lancamento salvo no painel.");
   }
@@ -707,17 +833,18 @@ export default function FinanceExperience() {
         return;
       }
 
-      setTransactions((current) => [...imported, ...current]);
+      const saved = await createServerTransactions(imported);
+      setTransactions((current) => [...saved.transactions, ...current]);
       setImportFeedback(`${imported.length} lancamento(s) importado(s).`);
-    } catch {
-      setImportFeedback("Nao consegui ler esse arquivo.");
+    } catch (error) {
+      setImportFeedback(error instanceof Error ? error.message : "Nao consegui ler esse arquivo.");
     }
   }
 
   if (isAuthed) {
     return (
       <main className="min-h-screen bg-[#f5faf6] text-slate-950">
-        <Preloader visible={booting} />
+        <Preloader visible={booting || transactionsLoading} />
         <DashboardHeader
           onLogout={() => {
             setTransactions([]);
