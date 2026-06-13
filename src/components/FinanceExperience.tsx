@@ -314,6 +314,7 @@ export default function FinanceExperience() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [amountMin, setAmountMin] = useState(0);
   const [amountMax, setAmountMax] = useState(0);
+  const [amountMaxTouched, setAmountMaxTouched] = useState(false);
   const [budgetDraft, setBudgetDraft] = useState<FinanceBudget>({
     category: "Alimentacao",
     limit: 0,
@@ -498,13 +499,13 @@ export default function FinanceExperience() {
 
   useEffect(() => {
     const amountTimer = window.setTimeout(() => {
-      if (amountMax === 0 || amountMax !== maxFilterAmount) {
+      if (amountMax === 0 || (!amountMaxTouched && amountMax !== maxFilterAmount)) {
         setAmountMax(maxFilterAmount);
       }
     }, 0);
 
     return () => window.clearTimeout(amountTimer);
-  }, [amountMax, maxFilterAmount]);
+  }, [amountMax, amountMaxTouched, maxFilterAmount]);
 
   const visibleTransactions = useMemo(() => {
     const normalizedSearch = normalizeText(searchTerm);
@@ -586,6 +587,14 @@ export default function FinanceExperience() {
       : draftAmount;
   const selectedReportYear = Number(selectedMonth.slice(0, 4));
   const selectedReportMonthIndex = Number(selectedMonth.slice(5, 7)) - 1;
+  const reportUserName = session?.user?.name ?? session?.user?.email ?? "Usuario";
+  const reportPeriodLabel =
+    scope === "year"
+      ? currentYear
+      : new Date(`${selectedMonth}-01T12:00:00`).toLocaleDateString("pt-BR", {
+          month: "long",
+          year: "numeric",
+        });
 
   function openAuth(mode: "login" | "signup") {
     setAuthMode(mode);
@@ -599,6 +608,27 @@ export default function FinanceExperience() {
       behavior: "smooth",
       block: "start",
     });
+  }
+
+  function printReport() {
+    const originalTitle = document.title;
+    const safeUserName = normalizeText(reportUserName)
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+    const safePeriod = normalizeText(reportPeriodLabel)
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+
+    document.title = `VerdeFlux - Relatorio - ${safeUserName || "usuario"} - ${safePeriod || currentYear}`;
+
+    const restoreTitle = () => {
+      document.title = originalTitle;
+      window.removeEventListener("afterprint", restoreTitle);
+    };
+
+    window.addEventListener("afterprint", restoreTitle);
+    window.print();
+    window.setTimeout(restoreTitle, 60000);
   }
 
   function cancelEdit() {
@@ -1057,7 +1087,18 @@ export default function FinanceExperience() {
             void signOut({ redirect: false });
           }}
         />
-        <section id="report-surface" className="print-surface mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 pb-14 pt-24 sm:px-6 lg:px-8">
+        <PrintableReport
+          userName={reportUserName}
+          periodLabel={reportPeriodLabel}
+          scope={scope}
+          income={income}
+          expenses={expenses}
+          balance={balance}
+          savingsRate={savingsRate}
+          budgets={budgetRows}
+          transactions={visibleTransactions}
+        />
+        <section id="report-surface" className="app-screen mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 pb-14 pt-24 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Painel financeiro</p>
@@ -1615,7 +1656,7 @@ export default function FinanceExperience() {
                 <ActionButton icon={Table2} label="Exportar CSV" onClick={exportCsv} />
                 <ActionButton icon={FileSpreadsheet} label="Exportar Excel" onClick={exportXlsx} />
                 <ActionButton icon={Upload} label="Importar arquivo" onClick={() => fileInputRef.current?.click()} />
-                <ActionButton icon={Printer} label="PDF / imprimir" onClick={() => window.print()} />
+                <ActionButton icon={Printer} label="PDF / imprimir" onClick={printReport} />
                 <ActionButton icon={Download} label="Backup completo" onClick={exportJson} />
               </div>
               {importFeedback ? <p className="mt-4 text-sm font-medium text-emerald-700">{importFeedback}</p> : null}
@@ -1698,7 +1739,10 @@ export default function FinanceExperience() {
                       max={maxFilterAmount}
                       step={10}
                       value={amountMax}
-                      onChange={(event) => setAmountMax(Number(event.target.value))}
+                      onChange={(event) => {
+                        setAmountMaxTouched(true);
+                        setAmountMax(Number(event.target.value));
+                      }}
                       className="accent-emerald-700"
                       aria-label="Valor maximo"
                     />
@@ -1817,6 +1861,119 @@ export default function FinanceExperience() {
         onFinish={finishAuth}
       />
     </main>
+  );
+}
+
+function PrintableReport({
+  userName,
+  periodLabel,
+  scope,
+  income,
+  expenses,
+  balance,
+  savingsRate,
+  budgets,
+  transactions,
+}: {
+  userName: string;
+  periodLabel: string;
+  scope: "month" | "year";
+  income: number;
+  expenses: number;
+  balance: number;
+  savingsRate: number;
+  budgets: Array<FinanceBudget & { spent: number; percentage: number }>;
+  transactions: FinanceTransaction[];
+}) {
+  const orderedTransactions = [...transactions].sort((a, b) => b.date.localeCompare(a.date));
+
+  return (
+    <section className="print-only">
+      <header className="print-report-header">
+        <div>
+          <p className="print-kicker">VerdeFlux</p>
+          <h1>Relatório financeiro</h1>
+          <p>
+            {userName} · {scope === "year" ? "Ano" : "Período"}: {periodLabel}
+          </p>
+        </div>
+        <div className="print-generated">
+          Gerado em {new Date().toLocaleDateString("pt-BR")}
+        </div>
+      </header>
+
+      <div className="print-summary-grid">
+        {[
+          ["Receitas", formatCurrency(income)],
+          ["Despesas", formatCurrency(expenses)],
+          ["Saldo", formatCurrency(balance)],
+          ["Economia", formatPercent(savingsRate)],
+        ].map(([label, value]) => (
+          <article key={label} className="print-summary-card">
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </article>
+        ))}
+      </div>
+
+      <section className="print-section">
+        <h2>Orçamentos</h2>
+        {budgets.length ? (
+          <table className="print-table">
+            <thead>
+              <tr>
+                <th>Categoria</th>
+                <th>Gasto</th>
+                <th>Limite</th>
+                <th>Uso</th>
+              </tr>
+            </thead>
+            <tbody>
+              {budgets.map((budget) => (
+                <tr key={budget.category}>
+                  <td>{budget.category}</td>
+                  <td>{formatCurrency(budget.spent)}</td>
+                  <td>{formatCurrency(budget.limit)}</td>
+                  <td>{formatPercent(budget.percentage)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="print-empty">Nenhum orçamento configurado.</p>
+        )}
+      </section>
+
+      <section className="print-section">
+        <h2>Lançamentos</h2>
+        {orderedTransactions.length ? (
+          <table className="print-table">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Descrição</th>
+                <th>Categoria</th>
+                <th>Tipo</th>
+                <th>Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orderedTransactions.map((transaction) => (
+                <tr key={transaction.id}>
+                  <td>{new Date(`${transaction.date}T12:00:00`).toLocaleDateString("pt-BR")}</td>
+                  <td>{transaction.description}</td>
+                  <td>{transaction.category}</td>
+                  <td>{transaction.type === "income" ? "Receita" : "Despesa"}</td>
+                  <td>{formatCurrency(transaction.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="print-empty">Nenhum lançamento encontrado para os filtros atuais.</p>
+        )}
+      </section>
+    </section>
   );
 }
 

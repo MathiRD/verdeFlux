@@ -45,6 +45,10 @@ select {
   will-change: transform;
 }
 
+.print-only {
+  display: none;
+}
+
 @keyframes preloader-out {
   to {
     opacity: 0;
@@ -53,21 +57,131 @@ select {
 }
 
 @media print {
-  body {
-    background: #ffffff;
+  @page {
+    margin: 14mm;
   }
 
-  .no-print {
+  body {
+    background: #ffffff;
+    color: #0f172a;
+  }
+
+  .no-print,
+  .app-screen {
     display: none !important;
   }
 
-  .print-surface {
-    max-width: none !important;
-    padding: 0 !important;
+  .print-only {
+    display: block !important;
+  }
+
+  .print-report-header {
+    align-items: flex-start;
+    border-bottom: 2px solid #047857;
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 16px;
+  }
+
+  .print-kicker {
+    color: #047857;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    margin: 0 0 6px;
+    text-transform: uppercase;
+  }
+
+  .print-report-header h1 {
+    font-size: 28px;
+    line-height: 1.1;
+    margin: 0;
+  }
+
+  .print-report-header p {
+    color: #475569;
+    font-size: 12px;
+    margin: 8px 0 0;
+  }
+
+  .print-generated {
+    color: #475569;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .print-summary-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(4, 1fr);
+    margin: 18px 0;
+  }
+
+  .print-summary-card {
+    border: 1px solid #bbf7d0;
+    border-radius: 10px;
+    padding: 12px;
+  }
+
+  .print-summary-card span {
+    color: #475569;
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .print-summary-card strong {
+    color: #0f172a;
+    display: block;
+    font-size: 17px;
+    margin-top: 6px;
+  }
+
+  .print-section {
+    break-inside: avoid;
+    margin-top: 20px;
+  }
+
+  .print-section h2 {
+    color: #0f172a;
+    font-size: 16px;
+    margin: 0 0 10px;
+  }
+
+  .print-table {
+    border-collapse: collapse;
+    font-size: 11px;
+    width: 100%;
+  }
+
+  .print-table th {
+    background: #ecfdf5;
+    color: #064e3b;
+    font-weight: 800;
+    text-align: left;
+  }
+
+  .print-table th,
+  .print-table td {
+    border: 1px solid #d1fae5;
+    padding: 7px 8px;
+    vertical-align: top;
+  }
+
+  .print-empty {
+    border: 1px dashed #bbf7d0;
+    border-radius: 10px;
+    color: #475569;
+    font-size: 12px;
+    padding: 12px;
   }
 
   .print-surface section,
-  .print-surface article {
+  .print-surface article,
+  .print-section,
+  .print-summary-card {
     break-inside: avoid;
     box-shadow: none !important;
   }
