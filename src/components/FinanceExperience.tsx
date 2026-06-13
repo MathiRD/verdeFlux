@@ -27,6 +27,7 @@ import {
   Plus,
   Printer,
   Receipt,
+  Search,
   ShieldCheck,
   Sparkles,
   Table2,
@@ -58,6 +59,7 @@ import {
   categories,
   categoryColors,
   demoBudgets,
+  FinanceBudget,
   FinanceTransaction,
   formatCurrency,
   formatPercent,
@@ -302,9 +304,23 @@ export default function FinanceExperience() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [reportPickerOpen, setReportPickerOpen] = useState(false);
   const [transactions, setTransactions] = useState<FinanceTransaction[]>([]);
+  const [budgets, setBudgets] = useState<FinanceBudget[]>([]);
   const [draft, setDraft] = useState<DraftTransaction>(initialDraft);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [editWholeSeries, setEditWholeSeries] = useState(false);
   const [draftFeedback, setDraftFeedback] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | TransactionKind>("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [amountMin, setAmountMin] = useState(0);
+  const [amountMax, setAmountMax] = useState(0);
+  const [budgetDraft, setBudgetDraft] = useState<FinanceBudget>({
+    category: "Alimentacao",
+    limit: 0,
+    accent: "#16a34a",
+  });
+  const [editingBudgetCategory, setEditingBudgetCategory] = useState<string | null>(null);
+  const [budgetFeedback, setBudgetFeedback] = useState("");
   const [quickEntry, setQuickEntry] = useState("");
   const [quickFeedback, setQuickFeedback] = useState("");
   const [importFeedback, setImportFeedback] = useState("");
@@ -439,6 +455,34 @@ export default function FinanceExperience() {
     return () => window.clearTimeout(hydrationTimer);
   }, [status, userId, createServerTransactions]);
 
+  useEffect(() => {
+    if (status !== "authenticated") {
+      const resetTimer = window.setTimeout(() => setBudgets([]), 0);
+      return () => window.clearTimeout(resetTimer);
+    }
+
+    const budgetTimer = window.setTimeout(() => {
+      async function loadBudgets() {
+        try {
+          const response = await fetch("/api/budgets");
+
+          if (!response.ok) {
+            throw new Error("Nao foi possivel carregar os orcamentos.");
+          }
+
+          const payload = (await response.json()) as { budgets?: FinanceBudget[] };
+          setBudgets(payload.budgets ?? []);
+        } catch {
+          setBudgetFeedback("Nao consegui carregar os orcamentos.");
+        }
+      }
+
+      void loadBudgets();
+    }, 0);
+
+    return () => window.clearTimeout(budgetTimer);
+  }, [status]);
+
   const filteredTransactions = useMemo(() => {
     if (scope === "year") {
       return transactions.filter((transaction) => transaction.date.startsWith(currentYear));
@@ -446,6 +490,40 @@ export default function FinanceExperience() {
 
     return transactions.filter((transaction) => transaction.date.startsWith(selectedMonth));
   }, [scope, selectedMonth, transactions]);
+
+  const maxFilterAmount = useMemo(() => {
+    const maxAmount = Math.max(0, ...filteredTransactions.map((transaction) => transaction.amount));
+    return Math.max(100, Math.ceil(maxAmount / 100) * 100);
+  }, [filteredTransactions]);
+
+  useEffect(() => {
+    const amountTimer = window.setTimeout(() => {
+      if (amountMax === 0 || amountMax !== maxFilterAmount) {
+        setAmountMax(maxFilterAmount);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(amountTimer);
+  }, [amountMax, maxFilterAmount]);
+
+  const visibleTransactions = useMemo(() => {
+    const normalizedSearch = normalizeText(searchTerm);
+    const min = Math.min(amountMin, amountMax);
+    const max = Math.max(amountMin, amountMax);
+
+    return filteredTransactions.filter((transaction) => {
+      const matchesSearch = normalizedSearch
+        ? normalizeText(
+            `${transaction.description} ${transaction.category} ${transaction.account} ${transaction.source}`,
+          ).includes(normalizedSearch)
+        : true;
+      const matchesType = typeFilter === "all" ? true : transaction.type === typeFilter;
+      const matchesCategory = categoryFilter === "all" ? true : transaction.category === categoryFilter;
+      const matchesAmount = transaction.amount >= min && transaction.amount <= max;
+
+      return matchesSearch && matchesType && matchesCategory && matchesAmount;
+    });
+  }, [amountMax, amountMin, categoryFilter, filteredTransactions, searchTerm, typeFilter]);
 
   const income = useMemo(() => sumTransactions(filteredTransactions, "income"), [filteredTransactions]);
   const expenses = useMemo(() => sumTransactions(filteredTransactions, "expense"), [filteredTransactions]);
@@ -481,7 +559,7 @@ export default function FinanceExperience() {
   }, [filteredTransactions]);
 
   const budgetRows = useMemo(() => {
-    return demoBudgets.map((budget) => {
+    return budgets.map((budget) => {
       const spent = filteredTransactions
         .filter((transaction) => transaction.type === "expense" && transaction.category === budget.category)
         .reduce((total, transaction) => total + transaction.amount, 0);
@@ -492,13 +570,13 @@ export default function FinanceExperience() {
         percentage: Math.min(100, budget.limit > 0 ? (spent / budget.limit) * 100 : 0),
       };
     });
-  }, [filteredTransactions]);
+  }, [budgets, filteredTransactions]);
 
   const latestTransactions = useMemo(() => {
-    return [...transactions]
+    return [...visibleTransactions]
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 8);
-  }, [transactions]);
+  }, [visibleTransactions]);
 
   const draftOccurrenceCount = getOccurrenceCount(draft);
   const draftAmount = parseAmount(draft.amount);
@@ -525,12 +603,14 @@ export default function FinanceExperience() {
 
   function cancelEdit() {
     setEditingTransactionId(null);
+    setEditWholeSeries(false);
     setDraft(initialDraft);
     setDraftFeedback("");
   }
 
   function editTransaction(transaction: FinanceTransaction) {
     setEditingTransactionId(transaction.id);
+    setEditWholeSeries(false);
     setDraft({
       description: transaction.description.replace(/\s\(\d+\/\d+\)$/, ""),
       category: transaction.category,
@@ -546,7 +626,119 @@ export default function FinanceExperience() {
         ? "Editando apenas este lancamento da recorrencia."
         : "Editando lancamento.",
     );
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    transactionFormRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  async function updateBudget() {
+    if (!budgetDraft.category.trim() || budgetDraft.limit <= 0) {
+      setBudgetFeedback("Informe categoria e valor do orçamento.");
+      return;
+    }
+
+    const normalizedCategory = budgetDraft.category.trim();
+    const nextBudget = {
+      ...budgetDraft,
+      category: normalizedCategory,
+      accent: categoryColors[normalizedCategory] ?? budgetDraft.accent,
+    };
+
+    try {
+      const response = await fetch("/api/budgets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextBudget),
+      });
+
+      if (!response.ok) {
+        throw new Error("Nao foi possivel salvar o orçamento.");
+      }
+
+      if (editingBudgetCategory && editingBudgetCategory !== normalizedCategory) {
+        await fetch(`/api/budgets?category=${encodeURIComponent(editingBudgetCategory)}`, {
+          method: "DELETE",
+        });
+      }
+
+      const payload = (await response.json()) as { budget: FinanceBudget };
+
+      setBudgets((current) => {
+      const previousCategory = editingBudgetCategory ?? normalizedCategory;
+      const exists = current.some((budget) => budget.category === previousCategory);
+
+      if (!exists) {
+          return [...current, payload.budget];
+      }
+
+      return current.map((budget) =>
+          budget.category === previousCategory ? payload.budget : budget,
+      );
+    });
+      setBudgetFeedback("Orçamento salvo com sucesso.");
+    } catch (error) {
+      setBudgetFeedback(error instanceof Error ? error.message : "Nao foi possivel salvar o orçamento.");
+      return;
+    }
+
+    setEditingBudgetCategory(null);
+    setBudgetDraft({
+      category: "Alimentacao",
+      limit: 0,
+      accent: "#16a34a",
+    });
+  }
+
+  function editBudget(budget: FinanceBudget) {
+    setEditingBudgetCategory(budget.category);
+    setBudgetDraft(budget);
+  }
+
+  async function removeBudget(category: string) {
+    try {
+      const response = await fetch(`/api/budgets?category=${encodeURIComponent(category)}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Nao foi possivel remover o orçamento.");
+      }
+
+      setBudgets((current) => current.filter((budget) => budget.category !== category));
+      setBudgetFeedback("Orçamento removido.");
+    } catch (error) {
+      setBudgetFeedback(error instanceof Error ? error.message : "Nao foi possivel remover o orçamento.");
+      return;
+    }
+
+    if (editingBudgetCategory === category) {
+      setEditingBudgetCategory(null);
+      setBudgetDraft({
+        category: "Alimentacao",
+        limit: 0,
+        accent: "#16a34a",
+      });
+    }
+  }
+
+  function applyDraftToTransaction(transaction: FinanceTransaction, amount: number) {
+    const baseDescription = draft.description.trim();
+    const description =
+      transaction.recurrenceMode === "installments" &&
+      transaction.installmentIndex &&
+      transaction.installmentTotal
+        ? `${baseDescription} (${transaction.installmentIndex}/${transaction.installmentTotal})`
+        : baseDescription;
+
+    return {
+      ...transaction,
+      description,
+      category: draft.category,
+      account: draft.account,
+      type: draft.type,
+      amount,
+    } satisfies FinanceTransaction;
   }
 
   async function deleteTransaction(transactionId: string) {
@@ -637,23 +829,32 @@ export default function FinanceExperience() {
         return;
       }
 
-      const updatedTransaction: FinanceTransaction = {
-        ...currentTransaction,
-        description: draft.description.trim(),
-        category: draft.category,
-        account: draft.account,
-        type: draft.type,
-        amount,
-        date: draft.date,
-      };
+      const shouldUpdateSeries = editWholeSeries && currentTransaction.recurrenceId;
+      const targets = shouldUpdateSeries
+        ? transactions.filter(
+            (transaction) => transaction.recurrenceId === currentTransaction.recurrenceId,
+          )
+        : [currentTransaction];
+      const updatedTransactions = targets.map((transaction) =>
+        applyDraftToTransaction(
+          {
+            ...transaction,
+            date: shouldUpdateSeries ? transaction.date : draft.date,
+          },
+          amount,
+        ),
+      );
 
       try {
-        const saved = await updateServerTransaction(updatedTransaction);
+        const saved = await Promise.all(
+          updatedTransactions.map((transaction) => updateServerTransaction(transaction)),
+        );
+        const savedById = new Map(
+          saved.map((item) => [item.transaction.id, item.transaction]),
+        );
         setTransactions((current) =>
           current.map((transaction) =>
-            transaction.id === editingTransactionId
-              ? saved.transaction
-              : transaction,
+            savedById.get(transaction.id) ?? transaction,
           ),
         );
       } catch (error) {
@@ -662,8 +863,13 @@ export default function FinanceExperience() {
       }
 
       setEditingTransactionId(null);
+      setEditWholeSeries(false);
       setDraft(initialDraft);
-      setDraftFeedback("Lancamento atualizado.");
+      setDraftFeedback(
+        shouldUpdateSeries
+          ? "Série atualizada com sucesso."
+          : "Lançamento atualizado com sucesso.",
+      );
       return;
     }
 
@@ -711,16 +917,16 @@ export default function FinanceExperience() {
       const saved = await createServerTransactions(createdTransactions);
       setTransactions((current) => [...saved.transactions, ...current]);
     } catch (error) {
-      setDraftFeedback(error instanceof Error ? error.message : "Nao foi possivel salvar.");
+      setDraftFeedback(error instanceof Error ? `Erro ao inserir. ${error.message}` : "Erro ao inserir.");
       return;
     }
 
     setDraftFeedback(
       draft.recurrenceMode === "installments"
-        ? `${formatCurrency(amount)} dividido em ${occurrenceCount} parcelas.`
+        ? `Inserido com sucesso. ${formatCurrency(amount)} dividido em ${occurrenceCount} parcelas.`
         : occurrenceCount > 1
-        ? `${occurrenceCount} lancamentos mensais criados.`
-        : "Lancamento criado.",
+        ? `Inserido com sucesso. ${occurrenceCount} lançamentos mensais criados.`
+        : "Inserido com sucesso.",
     );
     setDraft(initialDraft);
   }
@@ -1063,11 +1269,23 @@ export default function FinanceExperience() {
             <div ref={transactionFormRef} className="scroll-mt-24">
               <Panel title={editingTransactionId ? "Editar lancamento" : "Novo lancamento"} icon={Plus}>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {editingTransactionId ? (
-                    <div className="sm:col-span-2 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-                      Voce esta alterando um lancamento existente. Para recorrencias, a alteracao vale apenas para o item selecionado.
-                    </div>
-                  ) : null}
+                {editingTransactionId ? (
+                  <div className="sm:col-span-2 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                    Você está alterando um lançamento existente. Para recorrências, você pode atualizar só este item ou a série inteira.
+                  </div>
+                ) : null}
+                {editingTransactionId &&
+                transactions.find((transaction) => transaction.id === editingTransactionId)?.recurrenceId ? (
+                  <label className="sm:col-span-2 flex items-center gap-3 rounded-2xl border border-emerald-100 bg-white px-4 py-3 text-sm font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editWholeSeries}
+                      onChange={(event) => setEditWholeSeries(event.target.checked)}
+                      className="h-4 w-4 accent-emerald-700"
+                    />
+                    Atualizar a série inteira
+                  </label>
+                ) : null}
                 <label className="flex flex-col gap-1 text-sm font-medium text-slate-700 sm:col-span-2">
                   Descricao
                   <input
@@ -1284,28 +1502,103 @@ export default function FinanceExperience() {
           </div>
 
           <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
-            <Panel title="Orcamentos" icon={ShieldCheck}>
+            <Panel title="Orçamentos" icon={ShieldCheck}>
               <div className="space-y-4">
-                {budgetRows.map((budget) => (
-                  <div key={budget.category}>
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="font-semibold text-slate-800">{budget.category}</span>
-                      <span className="font-medium text-slate-600">
-                        {formatCurrency(budget.spent)} / {formatCurrency(budget.limit)}
-                      </span>
+                <div className="no-print grid gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-3 sm:grid-cols-[1fr_0.8fr_auto]">
+                  <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+                    Categoria
+                    <select
+                      value={budgetDraft.category}
+                      onChange={(event) =>
+                        setBudgetDraft((current) => ({
+                          ...current,
+                          category: event.target.value,
+                          accent: categoryColors[event.target.value] ?? current.accent,
+                        }))
+                      }
+                      className="h-11 rounded-xl border border-emerald-100 bg-white px-3 text-slate-950 outline-none transition focus:border-emerald-500"
+                    >
+                      {categories
+                        .filter((category) => category !== "Receita fixa" && category !== "Freelas")
+                        .map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+                    Limite mensal
+                    <input
+                      value={budgetDraft.limit || ""}
+                      inputMode="decimal"
+                      onChange={(event) =>
+                        setBudgetDraft((current) => ({
+                          ...current,
+                          limit: parseAmount(event.target.value),
+                        }))
+                      }
+                      className="h-11 rounded-xl border border-emerald-100 bg-white px-3 text-slate-950 outline-none transition focus:border-emerald-500"
+                      placeholder="0,00"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void updateBudget()}
+                    className="self-end rounded-xl bg-emerald-700 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-800"
+                  >
+                    {editingBudgetCategory ? "Salvar" : "Adicionar"}
+                  </button>
+                </div>
+                {budgetRows.length ? (
+                  budgetRows.map((budget) => (
+                    <div key={budget.category}>
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <span className="font-semibold text-slate-800">{budget.category}</span>
+                        <span className="font-medium text-slate-600">
+                          {formatCurrency(budget.spent)} / {formatCurrency(budget.limit)}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
+                        <motion.div
+                          className="h-full rounded-full"
+                          style={{ backgroundColor: budget.accent }}
+                          initial={{ width: 0 }}
+                          whileInView={{ width: `${budget.percentage}%` }}
+                          viewport={{ once: true }}
+                          transition={{ duration: 0.7, ease: "easeOut" }}
+                        />
+                      </div>
+                      <div className="no-print mt-2 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => editBudget(budget)}
+                          className="grid h-8 w-8 place-items-center rounded-full bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100"
+                          aria-label="Editar orçamento"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removeBudget(budget.category)}
+                          className="grid h-8 w-8 place-items-center rounded-full bg-rose-50 text-rose-700 transition hover:bg-rose-100"
+                          aria-label="Remover orçamento"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
-                      <motion.div
-                        className="h-full rounded-full"
-                        style={{ backgroundColor: budget.accent }}
-                        initial={{ width: 0 }}
-                        whileInView={{ width: `${budget.percentage}%` }}
-                        viewport={{ once: true }}
-                        transition={{ duration: 0.7, ease: "easeOut" }}
-                      />
-                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-emerald-200 bg-white p-5 text-center text-sm font-semibold text-slate-500">
+                    Nenhum orçamento configurado.
                   </div>
-                ))}
+                )}
+                {budgetFeedback ? (
+                  <p className="no-print text-sm font-semibold text-emerald-700">
+                    {budgetFeedback}
+                  </p>
+                ) : null}
               </div>
             </Panel>
 
@@ -1339,6 +1632,84 @@ export default function FinanceExperience() {
               </div>
             </Panel>
           </div>
+
+          <Panel title="Filtros de lancamentos" icon={Search}>
+            <div className="grid gap-3 lg:grid-cols-[1.3fr_0.8fr_0.9fr_1.4fr]">
+              <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+                Pesquisar
+                <div className="flex h-11 items-center gap-2 rounded-xl border border-emerald-100 bg-white px-3">
+                  <Search className="h-4 w-4 text-emerald-700" />
+                  <input
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    className="h-full min-w-0 flex-1 bg-transparent text-slate-950 outline-none"
+                    placeholder="salario, mercado, aluguel..."
+                  />
+                </div>
+              </label>
+              <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+                Tipo
+                <select
+                  value={typeFilter}
+                  onChange={(event) => setTypeFilter(event.target.value as "all" | TransactionKind)}
+                  className="h-11 rounded-xl border border-emerald-100 bg-white px-3 text-slate-950 outline-none transition focus:border-emerald-500"
+                >
+                  <option value="all">Tudo</option>
+                  <option value="income">Receitas</option>
+                  <option value="expense">Despesas</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+                Categoria
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="h-11 rounded-xl border border-emerald-100 bg-white px-3 text-slate-950 outline-none transition focus:border-emerald-500"
+                >
+                  <option value="all">Todas</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                Valor
+                <div className="rounded-xl border border-emerald-100 bg-white px-3 py-2">
+                  <div className="mb-2 flex items-center justify-between text-xs font-bold text-slate-600">
+                    <span>{formatCurrency(Math.min(amountMin, amountMax))}</span>
+                    <span>{formatCurrency(Math.max(amountMin, amountMax))}</span>
+                  </div>
+                  <div className="grid gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={maxFilterAmount}
+                      step={10}
+                      value={amountMin}
+                      onChange={(event) => setAmountMin(Number(event.target.value))}
+                      className="accent-emerald-700"
+                      aria-label="Valor minimo"
+                    />
+                    <input
+                      type="range"
+                      min={0}
+                      max={maxFilterAmount}
+                      step={10}
+                      value={amountMax}
+                      onChange={(event) => setAmountMax(Number(event.target.value))}
+                      className="accent-emerald-700"
+                      aria-label="Valor maximo"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p className="mt-3 text-sm font-semibold text-emerald-700">
+              {visibleTransactions.length} lançamento(s) encontrado(s).
+            </p>
+          </Panel>
 
           <Panel title="Ultimos lancamentos" icon={Receipt}>
             <div className="overflow-x-auto">
