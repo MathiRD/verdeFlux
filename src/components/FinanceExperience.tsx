@@ -136,6 +136,15 @@ function parseAmount(value: unknown) {
   return Number.isFinite(amount) ? amount : 0;
 }
 
+function splitInstallmentAmount(totalAmount: number, installments: number, index: number) {
+  const totalCents = Math.round(totalAmount * 100);
+  const baseCents = Math.floor(totalCents / installments);
+  const remainder = totalCents % installments;
+  const installmentCents = baseCents + (index < remainder ? 1 : 0);
+
+  return installmentCents / 100;
+}
+
 function formatIsoDate(date: Date) {
   return [
     date.getFullYear(),
@@ -403,6 +412,12 @@ export default function FinanceExperience() {
   }, [transactions]);
 
   const draftOccurrenceCount = getOccurrenceCount(draft);
+  const draftAmount = parseAmount(draft.amount);
+  const installmentPreviewAmount =
+    draft.recurrenceMode === "installments" && draftOccurrenceCount > 1
+      ? draftAmount / draftOccurrenceCount
+      : draftAmount;
+  const selectedReportDate = `${selectedMonth}-01`;
 
   function openAuth(mode: "login" | "signup") {
     setAuthMode(mode);
@@ -445,7 +460,10 @@ export default function FinanceExperience() {
         category: draft.category,
         account: draft.account,
         type: draft.type,
-        amount,
+        amount:
+          draft.recurrenceMode === "installments"
+            ? splitInstallmentAmount(amount, occurrenceCount, index)
+            : amount,
         date: addMonths(draft.date, index),
         source: occurrenceCount > 1 ? "Recorrente" : "Manual",
         recurrenceId,
@@ -462,7 +480,9 @@ export default function FinanceExperience() {
 
     setTransactions((current) => [...createdTransactions, ...current]);
     setDraftFeedback(
-      occurrenceCount > 1
+      draft.recurrenceMode === "installments"
+        ? `${formatCurrency(amount)} dividido em ${occurrenceCount} parcelas.`
+        : occurrenceCount > 1
         ? `${occurrenceCount} lancamentos mensais criados.`
         : "Lancamento criado.",
     );
@@ -613,14 +633,19 @@ export default function FinanceExperience() {
               >
                 Anual
               </button>
-              <label className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm">
+              <label className="relative flex cursor-pointer items-center gap-2 overflow-hidden rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:ring-2 hover:ring-emerald-100">
                 <Calendar className="h-4 w-4 text-emerald-700" />
+                <span>{selectedMonth}</span>
                 <input
                   aria-label="Mes do relatorio"
-                  type="month"
-                  value={selectedMonth}
-                  onChange={(event) => setSelectedMonth(event.target.value)}
-                  className="bg-transparent outline-none"
+                  type="date"
+                  value={selectedReportDate}
+                  onChange={(event) => {
+                    if (event.target.value) {
+                      setSelectedMonth(event.target.value.slice(0, 7));
+                    }
+                  }}
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                 />
               </label>
             </div>
@@ -730,7 +755,7 @@ export default function FinanceExperience() {
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
-                  Valor
+                  {draft.recurrenceMode === "installments" ? "Valor total" : "Valor"}
                   <input
                     value={draft.amount}
                     inputMode="decimal"
@@ -738,6 +763,11 @@ export default function FinanceExperience() {
                     className="h-11 rounded-xl border border-emerald-100 bg-white px-3 text-slate-950 outline-none transition focus:border-emerald-500"
                     placeholder="0,00"
                   />
+                  {draft.recurrenceMode === "installments" ? (
+                    <span className="text-xs font-semibold text-emerald-700">
+                      Informe o total da compra; ele sera dividido pelas parcelas.
+                    </span>
+                  ) : null}
                 </label>
                 <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
                   Data
@@ -820,22 +850,34 @@ export default function FinanceExperience() {
                     ))}
                   </div>
                   {draft.recurrenceMode === "installments" ? (
-                    <label className="mt-3 flex flex-col gap-1 text-sm font-medium text-slate-700">
-                      Parcelas
-                      <input
-                        type="number"
-                        min={2}
-                        max={60}
-                        value={draft.installmentCount}
-                        onChange={(event) =>
-                          setDraft((current) => ({
-                            ...current,
-                            installmentCount: Number(event.target.value),
-                          }))
-                        }
-                        className="h-11 rounded-xl border border-emerald-100 bg-white px-3 text-slate-950 outline-none transition focus:border-emerald-500"
-                      />
-                    </label>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_1.3fr]">
+                      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+                        Parcelas
+                        <input
+                          type="number"
+                          min={2}
+                          max={60}
+                          value={draft.installmentCount}
+                          onChange={(event) =>
+                            setDraft((current) => ({
+                              ...current,
+                              installmentCount: Number(event.target.value),
+                            }))
+                          }
+                          className="h-11 rounded-xl border border-emerald-100 bg-white px-3 text-slate-950 outline-none transition focus:border-emerald-500"
+                        />
+                      </label>
+                      <div className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-sm text-slate-700">
+                        <span className="block text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">
+                          Divisao automatica
+                        </span>
+                        <strong className="mt-1 block text-slate-950">
+                          {draftAmount > 0
+                            ? `${formatCurrency(draftAmount)} em ${draftOccurrenceCount}x de aprox. ${formatCurrency(installmentPreviewAmount)}`
+                            : "Digite o valor total da compra"}
+                        </strong>
+                      </div>
+                    </div>
                   ) : null}
                   {draft.recurrenceMode !== "single" ? (
                     <p className="mt-3 text-sm font-medium text-emerald-800">
@@ -848,7 +890,9 @@ export default function FinanceExperience() {
                   className="sm:col-span-2 inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-bold text-white shadow-lg shadow-emerald-900/10 transition hover:bg-emerald-800"
                 >
                   <Plus className="h-4 w-4" />
-                  Adicionar {draftOccurrenceCount > 1 ? `${draftOccurrenceCount}x` : ""}
+                  {draft.recurrenceMode === "installments"
+                    ? `Adicionar ${draftOccurrenceCount} parcelas`
+                    : `Adicionar ${draftOccurrenceCount > 1 ? `${draftOccurrenceCount}x` : ""}`}
                 </button>
                 {draftFeedback ? (
                   <p className="sm:col-span-2 text-sm font-medium text-emerald-700">
