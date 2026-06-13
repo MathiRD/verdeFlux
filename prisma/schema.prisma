@@ -1,0 +1,232 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum FinancialAccountType {
+  CHECKING
+  SAVINGS
+  CASH
+  CREDIT_CARD
+  INVESTMENT
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+enum TransactionSource {
+  MANUAL
+  IMPORT
+  QUICK_TEXT
+  RECURRING
+  OCR
+  WHATSAPP_BRIDGE
+}
+
+enum RecurrenceRuleType {
+  INSTALLMENT
+  MONTHLY_UNTIL_DATE
+  MONTHLY_OPEN
+}
+
+enum ImportFormat {
+  JSON
+  CSV
+  XLSX
+}
+
+enum ImportStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id                String             @id @default(cuid())
+  name              String?
+  email             String?            @unique
+  emailVerified     DateTime?
+  image             String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  accounts          Account[]
+  sessions          Session[]
+  financialAccounts FinancialAccount[]
+  categories        Category[]
+  transactions      Transaction[]
+  recurringRules    RecurrenceRule[]
+  budgets           Budget[]
+  receiptDocuments  ReceiptDocument[]
+  importJobs        ImportJob[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model FinancialAccount {
+  id             String               @id @default(cuid())
+  userId         String
+  name           String
+  type           FinancialAccountType @default(CHECKING)
+  currency       String               @default("BRL")
+  openingBalance Decimal              @default(0) @db.Decimal(14, 2)
+  color          String               @default("#16a34a")
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions   Transaction[]
+
+  @@index([userId])
+}
+
+model Category {
+  id           String          @id @default(cuid())
+  userId       String
+  name         String
+  type         TransactionType @default(EXPENSE)
+  color        String          @default("#16a34a")
+  monthlyLimit Decimal?        @db.Decimal(14, 2)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@unique([userId, name, type])
+  @@index([userId])
+}
+
+model Transaction {
+  id               String             @id @default(cuid())
+  userId           String
+  accountId        String?
+  categoryId       String?
+  recurrenceRuleId String?
+  type             TransactionType
+  source           TransactionSource  @default(MANUAL)
+  amount           Decimal            @db.Decimal(14, 2)
+  currency         String             @default("BRL")
+  occurredAt       DateTime
+  description      String
+  merchant         String?
+  notes            String?            @db.Text
+  installmentIndex Int?
+  installmentTotal Int?
+  rawPayload       Json?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account          FinancialAccount?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  category         Category?          @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  recurrenceRule   RecurrenceRule?    @relation(fields: [recurrenceRuleId], references: [id], onDelete: SetNull)
+  receiptDocuments ReceiptDocument[]
+
+  @@index([userId, occurredAt])
+  @@index([recurrenceRuleId])
+  @@index([categoryId])
+  @@index([accountId])
+}
+
+model RecurrenceRule {
+  id               String             @id @default(cuid())
+  userId           String
+  type             RecurrenceRuleType
+  intervalMonths   Int                @default(1)
+  totalOccurrences Int?
+  startsAt         DateTime
+  endsAt           DateTime?
+  isActive         Boolean            @default(true)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions     Transaction[]
+
+  @@index([userId, startsAt])
+  @@index([isActive])
+}
+
+model Budget {
+  id             String   @id @default(cuid())
+  userId         String
+  categoryId     String
+  month          DateTime
+  limitAmount    Decimal  @db.Decimal(14, 2)
+  alertThreshold Int      @default(80)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category       Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, month])
+  @@index([userId, month])
+}
+
+model ReceiptDocument {
+  id            String       @id @default(cuid())
+  userId        String
+  transactionId String?
+  fileName      String
+  mimeType      String
+  storageUrl    String?
+  extractedData Json?
+  createdAt     DateTime     @default(now())
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([transactionId])
+}
+
+model ImportJob {
+  id          String       @id @default(cuid())
+  userId      String
+  format      ImportFormat
+  status      ImportStatus @default(PENDING)
+  totalRows   Int          @default(0)
+  importedRows Int         @default(0)
+  error       String?      @db.Text
+  metadata    Json?
+  createdAt   DateTime     @default(now())
+  finishedAt  DateTime?
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
