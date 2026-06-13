@@ -8,6 +8,7 @@ import {
   useTransform,
 } from "framer-motion";
 import { signIn, signOut, useSession } from "next-auth/react";
+import Swal from "sweetalert2";
 import {
   ArrowDownToLine,
   BarChart3,
@@ -475,7 +476,24 @@ export default function FinanceExperience() {
     }
   }
 
-  function deleteRecurrence(recurrenceId: string) {
+  async function deleteRecurrence(recurrenceId: string) {
+    const result = await Swal.fire({
+      title: "Excluir toda a serie?",
+      text: "Voce tem certeza que deseja excluir toda a serie? Essa acao remove todos os lancamentos vinculados.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Sim, excluir serie",
+      cancelButtonText: "Cancelar",
+      confirmButtonColor: "#be123c",
+      cancelButtonColor: "#047857",
+      reverseButtons: true,
+      focusCancel: true,
+    });
+
+    if (!result.isConfirmed) {
+      return;
+    }
+
     setTransactions((current) =>
       current.filter((transaction) => transaction.recurrenceId !== recurrenceId),
     );
@@ -1239,7 +1257,7 @@ export default function FinanceExperience() {
                           {transaction.recurrenceId ? (
                             <button
                               type="button"
-                              onClick={() => deleteRecurrence(transaction.recurrenceId!)}
+                              onClick={() => void deleteRecurrence(transaction.recurrenceId!)}
                               className="rounded-full border border-rose-100 bg-white px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-50"
                               title="Excluir toda a recorrencia"
                             >
