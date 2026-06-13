@@ -466,7 +466,24 @@ export default function FinanceExperience() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function deleteTransaction(transactionId: string) {
+  async function deleteTransaction(transactionId: string) {
+    const result = await Swal.fire({
+      title: "Excluir lançamento?",
+      text: "Você tem certeza que deseja excluir este lançamento?",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Sim, excluir",
+      cancelButtonText: "Cancelar",
+      confirmButtonColor: "#be123c",
+      cancelButtonColor: "#047857",
+      reverseButtons: true,
+      focusCancel: true,
+    });
+
+    if (!result.isConfirmed) {
+      return;
+    }
+
     setTransactions((current) =>
       current.filter((transaction) => transaction.id !== transactionId),
     );
@@ -478,11 +495,11 @@ export default function FinanceExperience() {
 
   async function deleteRecurrence(recurrenceId: string) {
     const result = await Swal.fire({
-      title: "Excluir toda a serie?",
-      text: "Voce tem certeza que deseja excluir toda a serie? Essa acao remove todos os lancamentos vinculados.",
+      title: "Excluir toda a série?",
+      text: "Você tem certeza que deseja excluir toda a série? Essa ação remove todos os lançamentos vinculados.",
       icon: "warning",
       showCancelButton: true,
-      confirmButtonText: "Sim, excluir serie",
+      confirmButtonText: "Sim, excluir série",
       cancelButtonText: "Cancelar",
       confirmButtonColor: "#be123c",
       cancelButtonColor: "#047857",
@@ -1072,7 +1089,7 @@ export default function FinanceExperience() {
                 >
                   <Plus className="h-4 w-4" />
                   {editingTransactionId
-                    ? "Salvar alteracoes"
+                    ? "Salvar alterações"
                     : draft.recurrenceMode === "installments"
                     ? `Adicionar ${draftOccurrenceCount} parcelas`
                     : `Adicionar ${draftOccurrenceCount > 1 ? `${draftOccurrenceCount}x` : ""}`}
@@ -1082,7 +1099,7 @@ export default function FinanceExperience() {
                     onClick={cancelEdit}
                     className="sm:col-span-2 inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 transition hover:border-emerald-300"
                   >
-                    Cancelar edicao
+                    Cancelar edição
                   </button>
                 ) : null}
                 {draftFeedback ? (
@@ -1247,7 +1264,7 @@ export default function FinanceExperience() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => deleteTransaction(transaction.id)}
+                            onClick={() => void deleteTransaction(transaction.id)}
                             className="grid h-9 w-9 place-items-center rounded-full bg-rose-50 text-rose-700 transition hover:bg-rose-100"
                             aria-label="Excluir lancamento"
                             title="Excluir lancamento"
